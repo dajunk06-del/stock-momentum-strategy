@@ -1,0 +1,51 @@
+name: Monthly stock momentum update
+on:
+  schedule:
+    - cron: "0 13 1 * *"   # 1st of every month, 8:00 AM Central (13:00 UTC)
+  workflow_dispatch:       # adds a "Run workflow" button for manual runs
+
+permissions:
+  contents: write   # save the updated log, signal and chart back to the repo
+  issues: write     # post the new picks as an issue (GitHub emails you)
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packages
+        run: pip install -r requirements.txt
+
+      - name: Calculate this month's picks
+        run: python stock_momentum.py
+
+      - name: Update the backtest
+        run: python stock_backtest.py
+
+      - name: Save results to the repo
+        id: save
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add stock_live_log.csv stock_signal.md stock_backtest_results.md stock_backtest_chart.png
+          if git diff --cached --quiet -- stock_live_log.csv; then
+            echo "new_signal=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new_signal=true" >> "$GITHUB_OUTPUT"
+          fi
+          git commit -m "Monthly signal update" || echo "Nothing to commit"
+          git push
+
+      - name: Post the picks as an issue
+        if: steps.save.outputs.new_signal == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "$(head -1 stock_signal.md | sed 's/^# //')" \
+            --body-file stock_signal.md
